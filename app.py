@@ -213,14 +213,17 @@ if uploaded_file and remark:
                     if existing_headers != gs_headers:
                         ws.update('A1', [gs_headers])
 
+                # ✅ ERROR FIX: Replace NaN with empty strings before saving
+                df_ax_pick_clean = df_ax_pick.fillna("")
+                
                 # Prepare data rows
                 rows_to_add = []
-                for _, row in df_ax_pick.iterrows():
+                for _, row in df_ax_pick_clean.iterrows():
                     row_data = [current_time, remark] + row.tolist()
                     rows_to_add.append(row_data)
                 
                 ws.append_rows(rows_to_add)
-                st.balloons()  # Adding animation
+                st.balloons()  
                 st.success("AX PICK හි සියලුම දත්ත සාර්ථකව Google Sheet එකට ඇතුළත් කළා!")
             except Exception as e:
                 st.error(f"Failed to save: {e}")
@@ -285,7 +288,9 @@ if st.session_state.admin_logged_in:
             
             if st.button("💾 Save Changes to Google Sheet"):
                 ws.clear()
-                ws.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
+                # ✅ ERROR FIX: Replace NaN with empty strings in admin editor
+                edited_df_clean = edited_df.fillna("")
+                ws.update([edited_df_clean.columns.values.tolist()] + edited_df_clean.values.tolist())
                 st.toast("දත්ත සාර්ථකව Update විය!", icon="✅")
                 time.sleep(1)
                 st.rerun()

@@ -20,7 +20,6 @@ AX_COLUMNS_TO_KEEP = [
 # --- PAGE SETUP & BRANDING ---
 st.set_page_config(page_title="FTRN Inventory System", layout="wide", page_icon="📦")
 
-# CSS Animations & Branding
 st.markdown("""
     <style>
     @keyframes slideIn {
@@ -57,11 +56,15 @@ def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-def get_sheet():
+def get_spreadsheet():
     client = get_gspread_client()
-    return client.open(GOOGLE_SHEET_NAME).sheet1
+    return client.open(GOOGLE_SHEET_NAME)
 
-# --- ADMIN AUTHENTICATION ---
+def get_main_sheet():
+    return get_spreadsheet().sheet1
+
+
+# --- ADMIN AUTHENTICATION & SIDEBAR ---
 if "admin_logged_in" not in st.session_state:
     st.session_state.admin_logged_in = False
 
@@ -85,12 +88,42 @@ with st.sidebar:
             st.rerun()
         
         st.divider()
-        st.subheader("🛠️ Manage Google Sheet")
+        st.subheader("🛠️ Manage Data")
+        
+        # --- NEW BACKUP FEATURE ---
+        if st.button("💾 Backup Data"):
+            with st.spinner("Creating Backup..."):
+                try:
+                    sh = get_spreadsheet()
+                    main_ws = sh.sheet1
+                    data = main_ws.get_all_values()
+                    
+                    if data:
+                        # Backup sheet නම සෑදීම (දිනය සහ වේලාව සමඟ)
+                        current_dt = datetime.now(SL_TIMEZONE).strftime("%Y_%m_%d_%H%M%S")
+                        backup_name = f"Backup_{current_dt}"
+                        
+                        # අලුත් sheet එකක් සෑදීම
+                        backup_ws = sh.add_worksheet(title=backup_name, rows=max(100, len(data) + 10), cols=max(20, len(data[0]) + 5))
+                        backup_ws.update('A1', data)
+                        
+                        st.toast(f"Backup සාර්ථකයි: {backup_name}", icon="✅")
+                        st.balloons()
+                    else:
+                        st.warning("Backup කිරීමට තරම් දත්ත ප්‍රධාන Sheet එකේ නොමැත!")
+                except Exception as e:
+                    st.error(f"Backup Error: {e}")
+
+        st.write("") # Spacing
         if st.button("⚠️ Reset Entire Sheet"):
-            ws = get_sheet()
-            ws.clear()
-            st.toast("Sheet එක සම්පූර්ණයෙන්ම මකා දමන ලදී!", icon="🗑️")
-            st.snow()
+            try:
+                ws = get_main_sheet()
+                ws.clear()
+                st.toast("Sheet එක සම්පූර්ණයෙන්ම මකා දමන ලදී!", icon="🗑️")
+                st.snow()
+            except Exception as e:
+                st.error(f"Reset Error: {e}")
+
 
 # --- MAIN APP LOGIC ---
 st.divider()
@@ -124,7 +157,7 @@ if uploaded_file and remark:
 
     # 5. Duplicate Check
     try:
-        ws = get_sheet()
+        ws = get_main_sheet()
         gs_data = pd.DataFrame(ws.get_all_records())
         
         duplicates = []
@@ -142,35 +175,24 @@ if uploaded_file and remark:
         st.warning(f"Google Connection Warning: {e}")
 
     # 6. Advanced Summary Generation
-    # RE Summary
     re_summary = df_re.groupby('Fabric Request Id').agg(
         RE_Line_Count=('Fabric Request Id', 'count'),
         RE_Roll_Length_Total=('Roll Length', 'sum')
     ).reset_index()
 
-    # AX Summary
     ax_summary = df_ax_pick.groupby('FTR No').agg(
         AX_Line_Count=('FTR No', 'count'),
         AX_Issue_Qty_Total=('Issue Qty', 'sum')
     ).reset_index()
 
-    # Merge Summary
     df_summary = pd.merge(re_summary, ax_summary, left_on='Fabric Request Id', right_on='FTR No', how='outer')
     df_summary['Status'] = df_summary.apply(
         lambda row: "Matched" if pd.notna(row['FTR No']) and row['RE_Line_Count'] == row['AX_Line_Count'] else "Unmatched", 
         axis=1
     )
     
-    # Fill NaN values for cleaner display
     df_summary.fillna("-", inplace=True)
-    
-    # Rename columns for clarity in output
-    df_summary.rename(columns={
-        'Fabric Request Id': 'RE Fabric Request ID',
-        'FTR No': 'AX FTR No'
-    }, inplace=True)
-
-    # Reorder columns
+    df_summary.rename(columns={'Fabric Request Id': 'RE Fabric Request ID', 'FTR No': 'AX FTR No'}, inplace=True)
     df_summary = df_summary[['RE Fabric Request ID', 'RE_Roll_Length_Total', 'RE_Line_Count', 'AX FTR No', 'AX_Issue_Qty_Total', 'AX_Line_Count', 'Status']]
 
     # 7. Dashboard Metrics
@@ -186,7 +208,6 @@ if uploaded_file and remark:
     m4.metric("📦 AX Total Issue Qty", round(ax_qty_total, 2))
 
     st.subheader("📊 Summary Preview (Matched/Unmatched)")
-    # Highlight Unmatched in Streamlit
     def highlight_unmatched(val):
         color = 'red' if val == 'Unmatched' else 'green'
         return f'color: {color}; font-weight: bold'
@@ -194,21 +215,17 @@ if uploaded_file and remark:
 
     # 8. Save Data & Excel Generation
     current_time = datetime.now(SL_TIMEZONE).strftime("%Y-%m-%d %I:%M:%S %p")
-    
     col_save, col_dl = st.columns(2)
     
     if col_save.button("🚀 Save ALL AX PICK Data to Google Sheet"):
         with st.spinner("Saving to Google Sheets..."):
             try:
-                ws = get_sheet()
-                # Prepare headers
+                ws = get_main_sheet()
                 gs_headers = ["Upload Time", "Remark"] + list(df_ax_pick.columns)
                 
-                # If sheet is empty, add headers
                 if len(ws.get_all_values()) == 0:
                     ws.append_row(gs_headers)
                 else:
-                    # Update headers if they mismatch
                     existing_headers = ws.row_values(1)
                     if existing_headers != gs_headers:
                         ws.update('A1', [gs_headers])
@@ -216,7 +233,6 @@ if uploaded_file and remark:
                 # ✅ ERROR FIX: Replace NaN with empty strings before saving
                 df_ax_pick_clean = df_ax_pick.fillna("")
                 
-                # Prepare data rows
                 rows_to_add = []
                 for _, row in df_ax_pick_clean.iterrows():
                     row_data = [current_time, remark] + row.tolist()
@@ -230,8 +246,6 @@ if uploaded_file and remark:
 
     # Prepare Excel for Download
     output = io.BytesIO()
-    
-    # Add Totals Row to AX PICK for Excel
     df_ax_pick_excel = df_ax_pick.copy()
     total_row = pd.DataFrame([{col: '' for col in df_ax_pick_excel.columns}])
     total_row.loc[0, 'FTR No'] = 'TOTAL'
@@ -247,20 +261,16 @@ if uploaded_file and remark:
         worksheet_ax = writer.sheets['AX PICK']
         worksheet_sum = writer.sheets['Summery']
         
-        # Formats
         format_base = workbook.add_format({'font_name': 'Calibri', 'font_size': 11})
         format_bold = workbook.add_format({'font_name': 'Calibri', 'font_size': 11, 'bold': True, 'bg_color': '#D9D9D9'})
         format_red = workbook.add_format({'font_name': 'Calibri', 'font_size': 11, 'font_color': '#9C0006', 'bg_color': '#FFC7CE'})
         
-        # Apply Base Format
         worksheet_ax.set_column('A:Z', 15, format_base)
         worksheet_sum.set_column('A:Z', 20, format_base)
         
-        # Bold Total Row in AX PICK
         last_row_ax = len(df_ax_pick_excel)
         worksheet_ax.set_row(last_row_ax, None, format_bold)
 
-        # Highlight Unmatched in Summary
         worksheet_sum.conditional_format('G2:G1000', {
             'type': 'cell',
             'criteria': '==',
@@ -280,7 +290,7 @@ if st.session_state.admin_logged_in:
     st.divider()
     st.subheader("✏️ Edit or Delete Google Sheet Data")
     try:
-        ws = get_sheet()
+        ws = get_main_sheet()
         gs_data = pd.DataFrame(ws.get_all_records())
         if not gs_data.empty:
             st.info("පහත වගුව මත දත්ත වෙනස් කර හෝ මකා දමා 'Save Changes' ඔබන්න.")
